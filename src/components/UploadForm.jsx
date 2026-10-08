@@ -215,7 +215,7 @@ export default function UploadForm({ onUploadComplete, loading, error }) {
               <div style={styles.dropText}>
                 Drag & drop your repo ZIP file here, or click to browse
               </div>
-              <div style={styles.dropHint}>Supports .zip files up to 100MB</div>
+              <div style={styles.dropHint}>Supports .zip files up to 50MB</div>
               {file && <div style={styles.fileName}>{file.name}</div>}
             </div>
             <input
