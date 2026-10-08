@@ -1,6 +1,6 @@
 import os
 import time
-from collections import defaultdict
+from collections import OrderedDict
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -10,7 +10,7 @@ from app.routers import upload, analysis
 
 MAX_REQUEST_BYTES = 55 * 1024 * 1024
 RATE_WINDOW_SECONDS = 60.0
-_request_buckets: dict[str, tuple[int, float]] = defaultdict(lambda: (0, 0.0))
+_request_buckets: OrderedDict[str, tuple[int, float]] = OrderedDict()
 
 app = FastAPI(
     title="CodeAtlas",
@@ -54,12 +54,19 @@ async def request_guards(request: Request, call_next):
     if request.url.path.startswith("/api/upload") and request.method == "POST":
         client_host = request.client.host if request.client else "unknown"
         now = time.monotonic()
-        count, reset = _request_buckets[client_host]
+        count, reset = _request_buckets.get(client_host, (0, now + RATE_WINDOW_SECONDS))
         if now >= reset:
             count, reset = 0, now + RATE_WINDOW_SECONDS
         count += 1
+        _request_buckets.pop(client_host, None)
         _request_buckets[client_host] = (count, reset)
-        if count > int(os.getenv("CODEATLAS_UPLOADS_PER_MINUTE", "10")):
+        while len(_request_buckets) > 4096:
+            _request_buckets.popitem(last=False)
+        try:
+            max_uploads = max(1, int(os.getenv("CODEATLAS_UPLOADS_PER_MINUTE", "10")))
+        except ValueError:
+            max_uploads = 10
+        if count > max_uploads:
             return JSONResponse(
                 status_code=429,
                 content={"detail": "Upload rate limit exceeded. Try again shortly."},
