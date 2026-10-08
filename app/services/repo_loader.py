@@ -1,6 +1,7 @@
 import os
 import re
 import shutil
+import stat
 import subprocess
 import tempfile
 import zipfile
@@ -30,6 +31,7 @@ async def load_from_zip(upload_file: UploadFile) -> Path:
     tmp_dir = Path(tempfile.mkdtemp(prefix="codeatlas_"))
     zip_path = tmp_dir / "repo.zip"
     repo_dir = tmp_dir / "repo"
+    (tmp_dir / ".codeatlas-root").touch()
 
     try:
         size = 0
@@ -53,6 +55,9 @@ async def load_from_zip(upload_file: UploadFile) -> Path:
             extracted = 0
             for info in infos:
                 target = _safe_relative_path(repo_dir, info.filename)
+                mode = (info.external_attr >> 16) & 0o170000
+                if mode == stat.S_IFLNK:
+                    raise ValueError("ZIP contains an unsupported symbolic link.")
                 if info.is_dir():
                     target.mkdir(parents=True, exist_ok=True)
                     continue
@@ -85,6 +90,7 @@ def load_from_github(url: str) -> Path:
     owner, repo = match.groups()
     repo_dir_name = f"{owner}-{repo}"
     tmp_dir = Path(tempfile.mkdtemp(prefix="codeatlas_"))
+    (tmp_dir / ".codeatlas-root").touch()
     repo_dir = tmp_dir / repo_dir_name
     clone_url = f"https://github.com/{owner}/{repo}.git"
 
@@ -117,11 +123,10 @@ def load_from_github(url: str) -> Path:
 
 
 def cleanup_repository(repo_path: Path) -> Path:
-    # The analyzer returns the actual repository root; walk upward until our
-    # temp-directory marker is reached so the entire working tree is removed.
     path = repo_path.resolve()
-    while path.parent != path and not path.name.startswith("codeatlas_"):
-        path = path.parent
+    for candidate in (path, *path.parents):
+        if (candidate / ".codeatlas-root").is_file():
+            return candidate
     return path
 
 
