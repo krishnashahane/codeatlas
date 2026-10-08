@@ -16,16 +16,36 @@ PYTHON_EXTS = {".py"}
 JS_EXTS = {".js", ".jsx", ".ts", ".tsx", ".mjs"}
 
 MAX_FILES = 5000
+MAX_SOURCE_FILE_BYTES = 2 * 1024 * 1024
+MAX_TOTAL_SOURCE_BYTES = 50 * 1024 * 1024
+MAX_PATH_DEPTH = 30
 
 
 def analyze(repo_path: Path) -> AnalysisResult:
     """Analyze a repository and return architecture, dependency, and knowledge graphs."""
     file_infos = []
     file_count = 0
+    source_bytes = 0
     languages = set()
+    truncated = False
 
     for filepath in _walk_files(repo_path):
         if file_count >= MAX_FILES:
+            truncated = True
+            break
+
+        if len(filepath.relative_to(repo_path).parts) > MAX_PATH_DEPTH:
+            continue
+
+        try:
+            file_size = filepath.stat().st_size
+        except OSError:
+            continue
+
+        if file_size > MAX_SOURCE_FILE_BYTES:
+            continue
+        if source_bytes + file_size > MAX_TOTAL_SOURCE_BYTES:
+            truncated = True
             break
 
         ext = filepath.suffix.lower()
@@ -41,6 +61,7 @@ def analyze(repo_path: Path) -> AnalysisResult:
 
         file_infos.append(info)
         file_count += 1
+        source_bytes += file_size
 
     arch_map, dep_graph, knowledge_graph = build_graphs(file_infos)
 
@@ -60,6 +81,8 @@ def analyze(repo_path: Path) -> AnalysisResult:
         "architecture_nodes": len(arch_map.nodes),
         "dependency_nodes": len(dep_graph.nodes),
         "knowledge_nodes": len(knowledge_graph.nodes),
+        "truncated": truncated,
+        "source_bytes": source_bytes,
     }
 
     return AnalysisResult(
@@ -71,11 +94,24 @@ def analyze(repo_path: Path) -> AnalysisResult:
 
 
 def _walk_files(root: Path):
-    """Walk directory tree, skipping ignored directories."""
-    for item in sorted(root.iterdir()):
+    """Walk only regular files inside the analysis root."""
+    try:
+        items = sorted(root.iterdir())
+    except OSError:
+        return
+    root_resolved = root.resolve()
+    for item in items:
         if item.name.startswith(".") and item.is_dir():
             continue
         if item.name in SKIP_DIRS:
+            continue
+        try:
+            resolved = item.resolve(strict=False)
+        except OSError:
+            continue
+        if resolved != root_resolved and root_resolved not in resolved.parents:
+            continue
+        if item.is_symlink():
             continue
         if item.is_dir():
             yield from _walk_files(item)
