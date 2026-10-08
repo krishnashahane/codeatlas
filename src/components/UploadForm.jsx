@@ -130,16 +130,29 @@ export default function UploadForm({ onUploadComplete, loading, error }) {
   const isLoading = loading || localLoading;
   const displayError = error || localError;
 
+  const validateFile = (candidate) => {
+    if (!candidate.name.toLowerCase().endsWith(".zip")) {
+      setLocalError("Only .zip repository archives are supported.");
+      return false;
+    }
+    if (candidate.size > 50 * 1024 * 1024) {
+      setLocalError("ZIP files must be 50 MB or smaller.");
+      return false;
+    }
+    setLocalError(null);
+    return true;
+  };
+
   const handleFileSelect = (e) => {
     const selected = e.target.files?.[0];
-    if (selected) setFile(selected);
+    if (selected && validateFile(selected)) setFile(selected);
   };
 
   const handleDrop = (e) => {
     e.preventDefault();
     setIsDragging(false);
     const dropped = e.dataTransfer.files?.[0];
-    if (dropped) setFile(dropped);
+    if (dropped && validateFile(dropped)) setFile(dropped);
   };
 
   const handleSubmit = async () => {
