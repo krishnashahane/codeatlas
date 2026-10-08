@@ -1,17 +1,17 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, HttpUrl
 
 
 class Node(BaseModel):
     id: str
     label: str
-    type: str  # "file", "directory", "class", "function", "variable", "package"
-    metadata: dict = {}
+    type: str
+    metadata: dict = Field(default_factory=dict)
 
 
 class Edge(BaseModel):
     source: str
     target: str
-    type: str  # "imports", "contains", "inherits", "calls"
+    type: str
     weight: int = 1
 
 
@@ -32,4 +32,4 @@ class UploadResponse(BaseModel):
 
 
 class GithubUrlRequest(BaseModel):
-    github_url: str
+    github_url: HttpUrl
