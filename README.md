@@ -1,150 +1,163 @@
-# 🧠🌐 CodeAtlas
+# CodeAtlas
 
-**AI that understands your entire codebase.**
+CodeAtlas is a repository-structure analyzer with a React/Vite frontend and FastAPI backend.
 
-CodeAtlas analyzes a repository and generates a **visual architecture map, dependency graph, and knowledge graph** so developers can instantly understand how complex systems work.
+You can upload a ZIP repository or analyze a public GitHub repository URL. CodeAtlas parses Python and JavaScript/TypeScript source and produces three deterministic graph views:
 
-Instead of manually reading thousands of lines of code, CodeAtlas builds an **AI-powered structural understanding of the repository.**
+- **Architecture map** — directory/module relationships and heuristic layers.
+- **Dependency graph** — file-to-file and external-package imports.
+- **Knowledge graph** — classes, functions, variables, inheritance, definitions, and call references that can be resolved from the parsed source.
 
----
+This repository does **not** currently run an LLM, embeddings service, or semantic code-understanding model. The analysis is static and deterministic.
 
-## 🚀 Features
+## Requirements
 
-* 🧠 **AI Code Understanding**
-  Parses the entire repository and builds a structural model.
+- Python 3.10+
+- Node.js 20.19+
+- npm
+- Git, when analyzing a GitHub URL
 
-* 🏗 **Architecture Map**
-  Visualizes how modules, services, and layers connect.
+The backend pins FastAPI `0.143.0`, Uvicorn `0.54.0`, and python-multipart `0.0.27`. The multipart package is pinned to `0.0.27` because versions below that release have a published multipart-header denial-of-service vulnerability. citeturn616743search12
 
-* 🕸 **Dependency Graph**
-  Displays file, package, and library dependencies.
+The frontend uses React `19.3.0`, Vite `8.1.0`, `@vitejs/plugin-react` `6.1.2`, and D3 `7.9.0`. Vite has had multiple development-server file-disclosure/security advisories across older branches, so the project uses the current Vite 8 line. citeturn616743search0turn809934search0turn984890search2
 
-* 🌐 **Code Knowledge Graph**
-  Links functions, classes, modules, and interactions.
+## Project structure
 
-* ⚡ **Instant Repo Analysis**
-  Upload a repository and generate insights in seconds.
-
-* 🔎 **Developer Intelligence**
-
-  * Detect tightly coupled modules
-  * Find critical files
-  * Understand system entry points
-
----
-
-## 🧠 What It Generates
-
-CodeAtlas converts a codebase into **three intelligent visual layers**:
-
-### 1️⃣ Architecture Map
-
-High-level system overview.
-
-```
-Frontend
-   │
-   ▼
-API Layer
-   │
-   ▼
-Services
-   │
-   ▼
-Database
+```text
+codeatlas/
+├── app/
+│   ├── models/         # Pydantic request/response models
+│   ├── routers/        # FastAPI HTTP routes
+│   ├── services/       # Repository loading, parsing, graph generation
+│   └── store.py        # Bounded in-memory analysis sessions
+├── src/
+│   ├── components/     # React dashboard and graph views
+│   ├── api.js          # Backend API client
+│   └── App.jsx
+├── package.json
+├── requirements.txt
+├── vite.config.js
+└── README.md
 ```
 
----
+## Run locally
 
-### 2️⃣ Dependency Graph
+### Backend
 
-Shows how modules depend on each other.
+```bash
+python -m venv .venv
 
-```
-auth.js ───► userService.js
-userService.js ───► database.js
-database.js ───► models.js
-```
+# macOS/Linux
+source .venv/bin/activate
 
----
+# Windows PowerShell
+.venv\Scripts\Activate.ps1
 
-### 3️⃣ Knowledge Graph
-
-A semantic map of the entire codebase.
-
-```
-UserController
-   │
-   ├── createUser()
-   ├── loginUser()
-   │
-   ▼
-AuthService
-   │
-   ▼
-JWTModule
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
----
+Health check:
 
-## ⚙️ How It Works
+`http://127.0.0.1:8000/api/health`
 
-1. Repository is uploaded or cloned
-2. Code parser analyzes files
-3. AI extracts structure and relationships
-4. Graph engine builds system maps
-5. Interactive UI renders architecture and graphs
+### Frontend
 
----
+```bash
+npm install
+npm run dev
+```
 
-## 🛠 Tech Stack
+Open `http://127.0.0.1:5173`.
 
-**Backend**
+Vite is explicitly bound to loopback and proxies `/api` requests to FastAPI.
 
-* Node.js / Python
-* AST parsers
-* Graph generation
+### Production frontend
 
-**AI Layer**
+```bash
+npm run build
+npm run preview
+```
 
-* Code embeddings
-* semantic analysis
-* repository reasoning
+Run FastAPI separately behind your reverse proxy.
 
-**Frontend**
+## How analysis works
 
-* React
-* D3.js / Graph visualization
-* Interactive architecture viewer
+1. A ZIP or public GitHub URL is accepted.
+2. The backend creates a temporary workspace.
+3. ZIP entries are checked for path traversal, symlinks, file-count limits, extracted-size limits, and per-file limits.
+4. Public GitHub URLs are restricted to `https://github.com/OWNER/REPOSITORY` and cloned with shallow history.
+5. Python files are parsed with the Python AST.
+6. JavaScript/TypeScript files are analyzed with deterministic regex-based extraction.
+7. Parsed file information is converted into architecture, dependency, and knowledge graphs.
+8. The result is stored temporarily in a bounded in-memory session and returned through the analysis endpoint.
 
----
+## Resource limits
 
-## 📊 Example Use Cases
+| Limit | Value |
+| --- | ---: |
+| Uploaded ZIP | 50 MB |
+| ZIP entries | 5,000 |
+| Expanded ZIP size | 250 MB |
+| Individual analyzed source file | 2 MB |
+| Total analyzed source | 50 MB |
+| GitHub clone timeout | 120 seconds |
+| Stored analysis sessions | 256 |
+| Session lifetime | 1 hour |
 
-* Understand large open-source projects
-* Onboard developers faster
-* Analyze unfamiliar codebases
-* Visualize system architecture
-* Detect structural complexity
+Large or unusual repositories may be reported as truncated rather than being analyzed without bounds.
 
----
+## Security controls
 
-## 🎯 Vision
+- ZIP path traversal is rejected before extraction.
+- Archive symlinks are rejected.
+- Repository analysis ignores symlinked paths.
+- GitHub cloning accepts only HTTPS GitHub repository URLs.
+- Git prompts are disabled during automated cloning.
+- Temporary repositories are cleaned up after successful or failed analysis.
+- API errors no longer expose raw exception strings.
+- CORS is restricted to explicit local development origins.
+- Security response headers are applied by FastAPI.
+- Analysis sessions expire and are bounded to prevent unbounded memory growth.
+- Vite dev/preview servers bind to `127.0.0.1` rather than all interfaces.
+- Generated Python bytecode and frontend build artifacts are excluded from Git.
 
-Modern codebases are too large to understand by reading files manually.
+## API
 
-CodeAtlas transforms repositories into **interactive knowledge systems** where developers can explore architecture visually.
+```text
+GET  /api/health
+POST /api/upload
+POST /api/upload/github
+GET  /api/analysis/{session_id}
+```
 
----
+### ZIP upload
 
-## 🧑‍💻 Author
+```bash
+curl -X POST -F "file=@repository.zip" http://127.0.0.1:8000/api/upload
+```
 
-**Krishna Shahane**
+### GitHub repository
 
-Self-taught developer building tools to explore systems, intelligence, and technology.
+```bash
+curl -X POST -H "Content-Type: application/json" -d '{"github_url":"https://github.com/OWNER/REPOSITORY"}' http://127.0.0.1:8000/api/upload/github
+```
 
----
+Both endpoints return a `session_id`.
 
-## ⭐ Support
+```bash
+curl http://127.0.0.1:8000/api/analysis/SESSION_ID
+```
 
-If you find this project useful, give it a **star ⭐**.
+## Limitations
+
+- JavaScript/TypeScript parsing is heuristic and regex-based; it is not a full ECMAScript/TypeScript AST parser.
+- Import resolution is intentionally conservative.
+- Knowledge-graph call edges are only resolved when symbol names can be matched.
+- The in-memory session store is process-local and intended for single-instance use. Multi-worker or multi-instance deployments should use shared persistence and distributed rate limiting.
+- Public GitHub repositories only. Private repositories and authenticated GitHub access are intentionally unsupported.
+
+## License
+
+MIT
