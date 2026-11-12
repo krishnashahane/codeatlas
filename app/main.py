@@ -6,16 +6,102 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import JSONResponse
 
-from app.routers import upload, analysis
+from app.routers import analysis, upload
+
 
 MAX_REQUEST_BYTES = 55 * 1024 * 1024
 RATE_WINDOW_SECONDS = 60.0
+
+
+def _positive_int_env(name: str, default: int, *, maximum: int) -> int:
+    try:
+        value = int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+    return min(maximum, max(1, value))
+
+
+MAX_UPLOADS_PER_MINUTE = _positive_int_env(
+    "CODEATLAS_UPLOADS_PER_MINUTE", 10, maximum=1000
+)
 _request_buckets: OrderedDict[str, tuple[int, float]] = OrderedDict()
+
+
+class RequestBodyTooLarge(Exception):
+    """Raised when an upload exceeds the configured byte limit."""
+
+
+class RequestBodyLimitMiddleware:
+    """Enforce a request-body limit even when Content-Length is absent."""
+
+    def __init__(self, app, max_bytes: int) -> None:
+        self.app = app
+        self.max_bytes = max_bytes
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] != "http" or scope.get("path") not in {
+            "/api/upload",
+            "/api/upload/github",
+        }:
+            await self.app(scope, receive, send)
+            return
+
+        headers = dict(scope.get("headers", []))
+        raw_length = headers.get(b"content-length")
+        if raw_length is not None:
+            try:
+                content_length = int(raw_length)
+            except (TypeError, ValueError):
+                response = JSONResponse(
+                    status_code=400,
+                    content={"detail": "Invalid Content-Length header."},
+                )
+                await response(scope, receive, send)
+                return
+            if content_length < 0:
+                response = JSONResponse(
+                    status_code=400,
+                    content={"detail": "Invalid Content-Length header."},
+                )
+                await response(scope, receive, send)
+                return
+            if content_length > self.max_bytes:
+                response = JSONResponse(
+                    status_code=413,
+                    content={"detail": "Request body exceeds the 55 MB limit."},
+                )
+                await response(scope, receive, send)
+                return
+
+        received = 0
+
+        async def limited_receive():
+            nonlocal received
+            message = await receive()
+            if message["type"] == "http.request":
+                received += len(message.get("body", b""))
+                if received > self.max_bytes:
+                    raise RequestBodyTooLarge()
+            return message
+
+        await self.app(scope, limited_receive, send)
+
 
 app = FastAPI(
     title="CodeAtlas",
     description="Repository architecture, dependency, and knowledge graph analyzer",
 )
+
+app.add_middleware(RequestBodyLimitMiddleware, max_bytes=MAX_REQUEST_BYTES)
+
+
+@app.exception_handler(RequestBodyTooLarge)
+async def request_body_too_large(_request: Request, _exc: RequestBodyTooLarge):
+    return JSONResponse(
+        status_code=413,
+        content={"detail": "Request body exceeds the 55 MB limit."},
+    )
+
 
 allowed_origins = [
     origin.strip()
@@ -37,24 +123,12 @@ app.add_middleware(
 
 @app.middleware("http")
 async def request_guards(request: Request, call_next):
-    content_length = request.headers.get("content-length")
-    if content_length:
-        try:
-            if int(content_length) > MAX_REQUEST_BYTES:
-                return JSONResponse(
-                    status_code=413,
-                    content={"detail": "Request body exceeds the 55 MB limit."},
-                )
-        except ValueError:
-            return JSONResponse(
-                status_code=400,
-                content={"detail": "Invalid Content-Length header."},
-            )
-
     if request.url.path.startswith("/api/upload") and request.method == "POST":
         client_host = request.client.host if request.client else "unknown"
         now = time.monotonic()
-        count, reset = _request_buckets.get(client_host, (0, now + RATE_WINDOW_SECONDS))
+        count, reset = _request_buckets.get(
+            client_host, (0, now + RATE_WINDOW_SECONDS)
+        )
         if now >= reset:
             count, reset = 0, now + RATE_WINDOW_SECONDS
         count += 1
@@ -62,14 +136,12 @@ async def request_guards(request: Request, call_next):
         _request_buckets[client_host] = (count, reset)
         while len(_request_buckets) > 4096:
             _request_buckets.popitem(last=False)
-        try:
-            max_uploads = max(1, int(os.getenv("CODEATLAS_UPLOADS_PER_MINUTE", "10")))
-        except ValueError:
-            max_uploads = 10
-        if count > max_uploads:
+
+        if count > MAX_UPLOADS_PER_MINUTE:
             return JSONResponse(
                 status_code=429,
                 content={"detail": "Upload rate limit exceeded. Try again shortly."},
+                headers={"Retry-After": str(max(1, int(reset - now)))},
             )
 
     return await call_next(request)
@@ -85,6 +157,7 @@ async def security_headers(request: Request, call_next):
         "Permissions-Policy",
         "camera=(), microphone=(), geolocation=()",
     )
+    response.headers.setdefault("Cache-Control", "no-store")
     return response
 
 

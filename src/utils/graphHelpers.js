@@ -79,7 +79,19 @@ export function createTooltip() {
     .style("box-shadow", "0 8px 32px rgba(0,0,0,0.4)")
     .style("opacity", 0)
     .style("z-index", 9999)
-    .style("max-width", "300px");
+    .style("max-width", "300px")
+    .attr("role", "tooltip");
+}
+
+export function escapeHtml(value) {
+  const replacements = {
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;",
+  };
+  return String(value ?? "").replace(/[&<>"']/g, (character) => replacements[character]);
 }
 
 export function showTooltip(tooltip, event, html) {
@@ -143,7 +155,7 @@ export function createLegend(svg, items, { x = 20, y = 20 }) {
 
 export function nodeRadius(d) {
   const base = 8;
-  if (d.type === "directory") return base + (d.metadata?.file_count || 0) * 0.5;
+  if (d.type === "directory") return Math.min(24, base + Math.max(0, Number(d.metadata?.file_count) || 0) * 0.5);
   if (d.type === "package") return base + 2;
   return base;
 }

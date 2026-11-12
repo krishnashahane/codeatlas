@@ -10,6 +10,7 @@ import {
   addDrag,
   createLegend,
   nodeRadius,
+  escapeHtml,
 } from "../utils/graphHelpers";
 
 export default function ArchitectureMap({ graph }) {
@@ -113,13 +114,15 @@ export default function ArchitectureMap({ graph }) {
     // Tooltip
     node
       .on("mouseover", (event, d) => {
-        const layer = d.metadata?.layer || "Core";
-        const files = d.metadata?.file_count || 0;
+        const layer = escapeHtml(d.metadata?.layer || "Core");
+        const files = Number.isFinite(Number(d.metadata?.file_count))
+          ? Math.max(0, Number(d.metadata.file_count))
+          : 0;
         const entry = d.metadata?.has_entry_point ? "<br><b>Entry Point</b>" : "";
         showTooltip(
           tooltip,
           event,
-          `<b>${d.label}</b><br>Layer: ${layer}<br>Files: ${files}${entry}`
+          `<b>${escapeHtml(d.label)}</b><br>Layer: ${layer}<br>Files: ${files}${entry}`
         );
       })
       .on("mousemove", (event) => {

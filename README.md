@@ -1,41 +1,40 @@
 # CodeAtlas
 
-CodeAtlas is a repository-structure analyzer with a React/Vite frontend and FastAPI backend.
-
-You can upload a ZIP repository or analyze a public GitHub repository URL. CodeAtlas parses Python and JavaScript/TypeScript source and produces three deterministic graph views:
+CodeAtlas analyzes the structure of a source repository and produces three deterministic graph views:
 
 - **Architecture map** — directory/module relationships and heuristic layers.
 - **Dependency graph** — file-to-file and external-package imports.
-- **Knowledge graph** — classes, functions, variables, inheritance, definitions, and call references that can be resolved from the parsed source.
+- **Knowledge graph** — classes, functions, variables, inheritance, definitions, and resolvable call references.
 
-This repository does **not** currently run an LLM, embeddings service, or semantic code-understanding model. The analysis is static and deterministic.
+The application has a React/Vite frontend and a FastAPI backend. It accepts ZIP archives and public GitHub repository URLs. It does **not** run an LLM, embeddings service, or semantic code-understanding model; it does not execute uploaded source code.
 
 ## Requirements
 
 - Python 3.10+
-- Node.js 20.19+
+- Node.js 22.12+
 - npm
-- Git, when analyzing a GitHub URL
+- Git, when analyzing a public GitHub URL
 
-The backend pins FastAPI `0.143.0`, Uvicorn `0.54.0`, and python-multipart `0.0.27`. The multipart package is pinned to `0.0.27` because versions below that release have a published multipart-header denial-of-service vulnerability. citeturn616743search12
-
-The frontend uses React `19.3.0`, Vite `8.1.0`, `@vitejs/plugin-react` `6.1.2`, and D3 `7.9.0`. Vite has had multiple development-server file-disclosure/security advisories across older branches, so the project uses the current Vite 8 line. citeturn616743search0turn809934search0turn984890search2
+Runtime backend dependencies are pinned in `requirements.txt`. Frontend dependencies are declared in `package.json`.
 
 ## Project structure
 
 ```text
 codeatlas/
 ├── app/
-│   ├── models/         # Pydantic request/response models
-│   ├── routers/        # FastAPI HTTP routes
-│   ├── services/       # Repository loading, parsing, graph generation
-│   └── store.py        # Bounded in-memory analysis sessions
+│   ├── models/         # Pydantic request/response models and graph limits
+│   ├── routers/        # FastAPI upload and analysis routes
+│   ├── services/       # Repository loading, parsers, and graph generation
+│   └── store.py        # Bounded, expiring in-memory analysis sessions
 ├── src/
 │   ├── components/     # React dashboard and graph views
+│   ├── utils/          # D3 helpers and safe tooltip rendering
 │   ├── api.js          # Backend API client
 │   └── App.jsx
-├── package.json
+├── tests/
 ├── requirements.txt
+├── requirements-dev.txt
+├── package.json
 ├── vite.config.js
 └── README.md
 ```
@@ -55,12 +54,18 @@ source .venv/bin/activate
 
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
-uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
-Health check:
+Health check: `http://127.0.0.1:8000/api/health`.
 
-`http://127.0.0.1:8000/api/health`
+For development and tests, install the optional development tools:
+
+```bash
+python -m pip install -r requirements-dev.txt
+pytest -q
+ruff check app tests
+```
 
 ### Frontend
 
@@ -69,59 +74,75 @@ npm install
 npm run dev
 ```
 
-Open `http://127.0.0.1:5173`.
+Open `http://127.0.0.1:5173`. Vite binds to loopback and proxies `/api` requests to FastAPI.
 
-Vite is explicitly bound to loopback and proxies `/api` requests to FastAPI.
-
-### Production frontend
+Build and test the production frontend:
 
 ```bash
+npm test
 npm run build
 npm run preview
 ```
 
-Run FastAPI separately behind your reverse proxy.
+Run FastAPI separately behind a production reverse proxy. Configure the browser origin using `CODEATLAS_CORS_ORIGINS`.
 
 ## How analysis works
 
-1. A ZIP or public GitHub URL is accepted.
-2. The backend creates a temporary workspace.
-3. ZIP entries are checked for path traversal, symlinks, file-count limits, extracted-size limits, and per-file limits.
-4. Public GitHub URLs are restricted to `https://github.com/OWNER/REPOSITORY` and cloned with shallow history.
-5. Python files are parsed with the Python AST.
-6. JavaScript/TypeScript files are analyzed with deterministic regex-based extraction.
-7. Parsed file information is converted into architecture, dependency, and knowledge graphs.
-8. The result is stored temporarily in a bounded in-memory session and returned through the analysis endpoint.
+1. The backend accepts a ZIP archive or a public GitHub URL.
+2. ZIP contents are streamed to a temporary workspace and extracted in a worker thread.
+3. Archive paths, duplicate entries, symbolic links, special files, entry counts, expanded size, and individual file size are validated.
+4. GitHub URLs are restricted to HTTPS repository URLs on `github.com`; Git prompts and inherited Git configuration are disabled during shallow cloning.
+5. Python files are parsed with the Python AST. JavaScript/TypeScript extraction is heuristic and regex-based.
+6. Parsed information is converted into architecture, dependency, and knowledge graphs.
+7. Results are stored temporarily in a bounded process-local session store.
+
+CPU- and blocking-I/O-heavy work is dispatched to the worker thread pool so upload requests do not synchronously block the ASGI event loop.
 
 ## Resource limits
 
 | Limit | Value |
 | --- | ---: |
-| Uploaded ZIP | 50 MB |
+| HTTP upload request body | 55 MB |
+| ZIP archive | 50 MB |
 | ZIP entries | 5,000 |
 | Expanded ZIP size | 250 MB |
-| Individual analyzed source file | 2 MB |
+| Individual extracted file | 2 MB |
 | Total analyzed source | 50 MB |
+| Individual analyzed source file | 2 MB |
+| Analyzed files | 5,000 |
+| Analyzed path depth | 30 |
+| Repository entries walked | 25,000 |
+| Python AST nodes per file | 100,000 |
+| Extracted symbols/references per file | 500 |
+| Nodes per graph | 5,000 |
+| Edges per graph | 10,000 |
 | GitHub clone timeout | 120 seconds |
-| Stored analysis sessions | 256 |
+| Sessions retained per process | 32 |
+| Maximum size per session | 16 MB |
+| Aggregate session cache | 64 MB |
 | Session lifetime | 1 hour |
+| Upload requests per IP per minute | 10 by default |
 
-Large or unusual repositories may be reported as truncated rather than being analyzed without bounds.
+Analysis reports indicate when source or graph processing was truncated by a configured limit.
 
-## Security controls
+## Security and privacy
 
-- ZIP path traversal is rejected before extraction.
-- Archive symlinks are rejected.
-- Repository analysis ignores symlinked paths.
-- GitHub cloning accepts only HTTPS GitHub repository URLs.
-- Git prompts are disabled during automated cloning.
-- Temporary repositories are cleaned up after successful or failed analysis.
-- API errors no longer expose raw exception strings.
-- CORS is restricted to explicit local development origins.
-- Security response headers are applied by FastAPI.
-- Analysis sessions expire and are bounded to prevent unbounded memory growth.
-- Vite dev/preview servers bind to `127.0.0.1` rather than all interfaces.
-- Generated Python bytecode and frontend build artifacts are excluded from Git.
+- ZIP paths are validated before extraction; traversal, duplicate paths, symlinks, encrypted entries, and special files are rejected.
+- Repository walking is iterative and never follows symlinks.
+- GitHub input accepts only public HTTPS GitHub repository URLs. Private repository credentials and authenticated cloning are intentionally unsupported.
+- Git prompts and inherited user/system Git configuration are disabled for automated clones.
+- Request bodies are bounded even when the client omits `Content-Length`.
+- Upload routes are rate-limited per client IP within each application process.
+- Parser, graph, response, and session-store sizes are bounded.
+- Session identifiers are UUIDs; sessions expire and are evicted under memory pressure.
+- Repository-controlled tooltip content is HTML-escaped before rendering.
+- DOM labels are rendered as text, not HTML.
+- API responses use defensive security headers and errors avoid exposing raw exception details.
+- CORS is restricted to explicit origins. Do not configure wildcard origins in production.
+- Temporary repositories are cleaned up only when a CodeAtlas ownership marker is present, preventing cleanup from deleting arbitrary paths.
+- Invalid ZIP archives are rejected with a client error; GitHub URL fields have a bounded input length.
+
+The in-memory session store and per-process rate limiter are intended for a single-instance deployment. Multi-worker or multi-instance deployments should use shared persistence and distributed rate limiting.
 
 ## API
 
@@ -141,10 +162,13 @@ curl -X POST -F "file=@repository.zip" http://127.0.0.1:8000/api/upload
 ### GitHub repository
 
 ```bash
-curl -X POST -H "Content-Type: application/json" -d '{"github_url":"https://github.com/OWNER/REPOSITORY"}' http://127.0.0.1:8000/api/upload/github
+curl -X POST \
+  -H "Content-Type: application/json" \
+  -d '{"github_url":"https://github.com/OWNER/REPOSITORY"}' \
+  http://127.0.0.1:8000/api/upload/github
 ```
 
-Both endpoints return a `session_id`.
+Both endpoints return a `session_id`:
 
 ```bash
 curl http://127.0.0.1:8000/api/analysis/SESSION_ID
@@ -152,12 +176,12 @@ curl http://127.0.0.1:8000/api/analysis/SESSION_ID
 
 ## Limitations
 
-- JavaScript/TypeScript parsing is heuristic and regex-based; it is not a full ECMAScript/TypeScript AST parser.
+- JavaScript/TypeScript parsing is heuristic and regex-based; it is not a full ECMAScript or TypeScript AST parser.
 - Import resolution is intentionally conservative.
 - Knowledge-graph call edges are only resolved when symbol names can be matched.
-- The in-memory session store is process-local and intended for single-instance use. Multi-worker or multi-instance deployments should use shared persistence and distributed rate limiting.
-- Public GitHub repositories only. Private repositories and authenticated GitHub access are intentionally unsupported.
+- The session store and upload rate limiter are process-local. Horizontal scaling requires shared state and distributed limits.
+- Only public GitHub repositories are supported.
 
 ## License
 
-MIT
+MIT. See [LICENSE](LICENSE).
