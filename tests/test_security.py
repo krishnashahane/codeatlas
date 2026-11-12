@@ -1,6 +1,7 @@
 import asyncio
 import shutil
 import tempfile
+import time
 import unittest
 import zipfile
 from pathlib import Path
@@ -76,7 +77,7 @@ class SecurityTests(unittest.TestCase):
             self.assertEqual(store.get_session("a"), {"ok": True})
             with store._lock:
                 store.sessions["expired"] = {
-                    "created_at": 0,
+                    "created_at": time.monotonic() - store.SESSION_TTL_SECONDS - 1,
                     "result": {"old": True},
                     "size": 0,
                 }
