@@ -9,6 +9,7 @@ import {
   hideTooltip,
   addDrag,
   createLegend,
+  escapeHtml,
 } from "../utils/graphHelpers";
 
 export default function DependencyGraph({ graph }) {
@@ -127,10 +128,11 @@ export default function DependencyGraph({ graph }) {
     node
       .on("mouseover", (event, d) => {
         const conns = connectionCount[d.id] || 0;
+        const label = escapeHtml(d.label);
         const info =
           d.type === "package"
-            ? `<b>${d.label}</b><br>External Package`
-            : `<b>${d.label}</b><br>Module: ${d.metadata?.module || ""}<br>Connections: ${conns}${d.metadata?.is_entry_point ? "<br><b>Entry Point</b>" : ""}`;
+            ? `<b>${label}</b><br>External Package`
+            : `<b>${label}</b><br>Module: ${escapeHtml(d.metadata?.module || "")}<br>Connections: ${conns}${d.metadata?.is_entry_point ? "<br><b>Entry Point</b>" : ""}`;
         showTooltip(tooltip, event, info);
 
         // Highlight connected edges

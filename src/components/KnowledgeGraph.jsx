@@ -8,6 +8,7 @@ import {
   hideTooltip,
   addDrag,
   createLegend,
+  escapeHtml,
 } from "../utils/graphHelpers";
 
 const styles = {
@@ -162,16 +163,16 @@ export default function KnowledgeGraph({ graph }) {
     // Tooltip
     node
       .on("mouseover", (event, d) => {
-        let html = `<b>${d.label}</b><br>Type: ${d.type}`;
+        let html = `<b>${escapeHtml(d.label)}</b><br>Type: ${escapeHtml(d.type)}`;
         if (d.type === "class") {
           const methods = d.metadata?.methods || [];
           const bases = d.metadata?.bases || [];
-          if (bases.length) html += `<br>Extends: ${bases.join(", ")}`;
+          if (bases.length) html += `<br>Extends: ${bases.slice(0, 8).map(escapeHtml).join(", ")}`;
           if (methods.length)
-            html += `<br>Methods: ${methods.slice(0, 8).join(", ")}${methods.length > 8 ? "..." : ""}`;
+            html += `<br>Methods: ${methods.slice(0, 8).map(escapeHtml).join(", ")}${methods.length > 8 ? "..." : ""}`;
         } else if (d.type === "function") {
           const params = d.metadata?.params || [];
-          if (params.length) html += `<br>Params: ${params.join(", ")}`;
+          if (params.length) html += `<br>Params: ${params.slice(0, 12).map(escapeHtml).join(", ")}`;
           if (d.metadata?.is_async) html += `<br><b>async</b>`;
         }
         showTooltip(tooltip, event, html);

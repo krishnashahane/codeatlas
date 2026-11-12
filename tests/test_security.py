@@ -1,11 +1,14 @@
 import asyncio
+import shutil
 import tempfile
+import time
 import unittest
 import zipfile
 from pathlib import Path
 
 from fastapi import UploadFile
 
+from app import store
 from app.services.repo_loader import (
     MAX_EXTRACTED_BYTES,
     MAX_EXTRACTED_FILES,
@@ -13,7 +16,6 @@ from app.services.repo_loader import (
     load_from_github,
     load_from_zip,
 )
-from app import store
 
 
 class SecurityTests(unittest.TestCase):
@@ -21,8 +23,14 @@ class SecurityTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "repo"
             root.mkdir()
-            with self.assertRaises(ValueError):
-                _safe_relative_path(root, "../../outside.txt")
+            for name in (
+                "../../outside.txt",
+                "..\\..\\outside.txt",
+                "C:\\tmp\\outside.txt",
+            ):
+                with self.subTest(name=name):
+                    with self.assertRaises(ValueError):
+                        _safe_relative_path(root, name)
 
     def test_github_url_must_be_public_github_https(self):
         for url in (
@@ -30,9 +38,12 @@ class SecurityTests(unittest.TestCase):
             "https://example.com/repo",
             "https://github.com/user/repo/issues/1",
             "https://github.com/user/repo?x=1",
+            "https://github.com/../repo",
+            "https://github.com/user/..",
         ):
-            with self.assertRaises(ValueError):
-                load_from_github(url)
+            with self.subTest(url=url):
+                with self.assertRaises(ValueError):
+                    load_from_github(url)
 
     def test_zip_limits_are_defined(self):
         self.assertLessEqual(MAX_EXTRACTED_FILES, 5000)
@@ -51,25 +62,39 @@ class SecurityTests(unittest.TestCase):
                     try:
                         self.assertTrue((repo_path / "main.py").is_file())
                     finally:
-                        store_path = repo_path
-                        while store_path.parent != store_path and not (store_path / ".codeatlas-root").exists():
-                            store_path = store_path.parent
-                        import shutil
-                        shutil.rmtree(store_path, ignore_errors=True)
+                        shutil.rmtree(store_path(repo_path), ignore_errors=True)
 
         asyncio.run(run())
 
     def test_session_store_is_bounded_and_expiring(self):
-        original = dict(store.sessions)
-        try:
+        with store._lock:
+            original = dict(store.sessions)
+            original_total = store._total_bytes
             store.sessions.clear()
+            store._total_bytes = 0
+        try:
             store.save_session("a", {"ok": True})
             self.assertEqual(store.get_session("a"), {"ok": True})
-            store.sessions["expired"] = {"created_at": 0, "result": {"old": True}}
+            with store._lock:
+                store.sessions["expired"] = {
+                    "created_at": time.monotonic() - store.SESSION_TTL_SECONDS - 1,
+                    "result": {"old": True},
+                    "size": 0,
+                }
             self.assertIsNone(store.get_session("expired"))
         finally:
-            store.sessions.clear()
-            store.sessions.update(original)
+            with store._lock:
+                store.sessions.clear()
+                store.sessions.update(original)
+                store._total_bytes = original_total
+
+
+def store_path(repo_path: Path) -> Path:
+    path = repo_path.resolve()
+    for candidate in (path, *path.parents):
+        if (candidate / ".codeatlas-root").is_file():
+            return candidate
+    return path
 
 
 if __name__ == "__main__":
