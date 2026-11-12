@@ -1,0 +1,1 @@
+"""CodeAtlas FastAPI application package."""
